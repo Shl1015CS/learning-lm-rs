@@ -71,25 +71,92 @@ pub fn masked_softmax(y: &mut Tensor<f32>) {
 }
 
 pub fn rms_norm(y: &mut Tensor<f32>, x: &Tensor<f32>, w: &Tensor<f32>, epsilon: f32) {
-    todo!("实现 rms_norm，计算前做一些必要的检查会帮助你后续调试")
+    // 确保x至少为1维：最后一维表示每个向量的大小
+    let x_shape = x.shape();
+    assert!(x_shape.len() >= 1, "x 必须至少为1维的张量");
+    let n = *x_shape.last().unwrap() as usize;
+
+    // 检测x和y的总元素个数必须一致，且w的元素个数等于最后一维大小
+    assert!(y.size() == x.size(), "y 与 x 的元素数量必须一致");
+    assert!(w.size() == n, "权重张量 w 的大小必须与最后一维一致");
+
+    let total = x.size();
+    // 每个小向量的个数
+    let batch = total / n;
+
+    let x_data = x.data();
+    let y_data = unsafe { y.data_mut() };
+    let w_data = w.data();
+
+    // 针对每个向量进行归一化
+    for b in 0..batch {
+        let offset = b * n;
+        let mut sum_sq = 0.0;
+        // 计算该向量所有元素的平方和
+        for j in 0..n {
+            let val = x_data[offset + j];
+            sum_sq += val * val;
+        }
+        // 计算均值，即 sum_sq / n，并加上 epsilon，再开根号得到归一化因子
+        let norm_factor = ((sum_sq / n as f32) + epsilon).sqrt();
+        // 对每个元素进行归一化并乘以权重w（element-wise）
+        for j in 0..n {
+            y_data[offset + j] = w_data[j] * x_data[offset + j] / norm_factor;
+        }
+    }
 }
 
 // y = silu(x) * y
 // hint: this is an element-wise operation
 pub fn swiglu(y: &mut Tensor<f32>, x: &Tensor<f32>) {
-    // let len = y.size();
-    // assert!(len == x.size());
-
-    // let _y = unsafe { y.data_mut() };
-    // let _x = x.data();
-
-    todo!("实现 silu，这里给了一些前期准备工作的提示，你可以参考")
+    let len = y.size();
+    assert!(len == x.size());
+    let x_data = x.data();
+    let y_data = unsafe { y.data_mut() };
+    for i in 0..len {
+        let xi = x_data[i];
+        let sigmoid = 1.0 / (1.0 + (-xi).exp());
+        let silu = xi * sigmoid;
+        y_data[i] *= silu;
+    }
 }
 
 // C = beta * C + alpha * A @ B^T
 // hint: You don't need to do an explicit transpose of B
 pub fn matmul_transb(c: &mut Tensor<f32>, beta: f32, a: &Tensor<f32>, b: &Tensor<f32>, alpha: f32) {
-    todo!("实现 matmul_transb，计算前做一些必要的检查会帮助你后续调试");
+    // 检查 A 的形状：m×k
+    let a_shape = a.shape();
+    assert!(a_shape.len() == 2, "A 必须是二维矩阵");
+    let m = a_shape[0];
+    let k = a_shape[1];
+
+    // 检查 B 的形状：n×k
+    let b_shape = b.shape();
+    assert!(b_shape.len() == 2, "B 必须是二维矩阵");
+    assert!(b_shape[1] == k, "B 的列数必须与 A 的列数相等");
+    let n = b_shape[0];
+
+    // 检查 C 的形状：m×n
+    let c_shape = c.shape();
+    assert!(c_shape.len() == 2, "C 必须是二维矩阵");
+    assert!(c_shape[0] == m && c_shape[1] == n, "C 的形状必须为 m×n");
+
+    let a_data = a.data();
+    let b_data = b.data();
+    let c_data = unsafe { c.data_mut() };
+
+    // 对于 C 的每个元素，执行：C[i, j] = beta * C[i, j] + alpha * (∑ₚ A[i, p] * B[j, p])
+    for i in 0..m {
+        for j in 0..n {
+            let mut sum = 0.0;
+            // 注意：B 矩阵，以转置方式访问时，其对应第 j 行的原始数据即为
+            // B[j, p]，p 的范围为 0..k
+            for p in 0..k {
+                sum += a_data[i * k + p] * b_data[j * k + p];
+            }
+            c_data[i * n + j] = beta * c_data[i * n + j] + alpha * sum;
+        }
+    }
 }
 
 // Dot product of two tensors (treated as vectors)

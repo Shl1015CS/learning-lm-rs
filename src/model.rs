@@ -101,10 +101,10 @@ impl Llama<f32> {
             let full_k = &mut cache.k_cache(layer, 0); // (total_seq, n_kv_h * dqkv)
             let full_v = &mut cache.v_cache(layer, 0); // (total_seq, n_kv_h * dqkv)
 
-            todo!("self_attention(...)");
-            todo!("down_proj matmul and add residual");
+            // todo!("self_attention(...)");
+            // todo!("down_proj matmul and add residual");
 
-            todo!("mlp(...)");
+            // todo!("mlp(...)");
         }
 
         // No matter what seq_len, the output is always a 1D vector of length vocab,
@@ -135,7 +135,7 @@ impl Llama<f32> {
     ) -> Vec<u32>{
         let mut result = Vec::<u32>::new();
         
-        todo!("实现文本生成");
+        // todo!("实现文本生成");
         
         result
     }
@@ -153,7 +153,7 @@ fn self_attention(
     total_seq_len: usize,
     dqkv: usize,
 ) {
-    todo!("Implement self_attention");
+    // todo!("Implement self_attention");
 }
 
 fn mlp(
@@ -167,7 +167,32 @@ fn mlp(
     rms_w: &Tensor<f32>,
     eps: f32,
 ) {
-    todo!("Implement mlp");
+    // 1. 通过 RMS normalization 计算 hidden = rms_norm(residual)
+    OP::rms_norm(hidden_states, residual, rms_w, eps);
+    
+    // 2. 计算 gate = hidden @ gate_weight.T
+    //    注意：这里调用的是矩阵乘算子，设置 beta 为 0，alpha 为 1
+    OP::matmul_transb(gate, 0.0, hidden_states, w_gate, 1.0);
+    
+    // 3. 计算 up = hidden @ up_weight.T
+    OP::matmul_transb(up, 0.0, hidden_states, w_up, 1.0);
+    
+    // 4. 计算 SwiGLU 激活函数：act = gate * sigmoid(gate) * up
+    //    我们使用 swiglu 算子实现：传入的参数会将 up 的每个元素乘以 gate * sigmoid(gate)
+    //    执行后，up 中存储的就是 act 的结果
+    OP::swiglu(up, gate);
+    
+    // 5. 计算 output = act @ down_weight.T
+    //    输出 shape 为 [seq_len, d]，这里我们利用 hidden_states 这个缓冲区来存储 output
+    OP::matmul_transb(hidden_states, 0.0, up, w_down, 1.0);
+    
+    // 6. 残差连接：更新 residual = output + residual
+    let out_data = hidden_states.data();
+    let size = residual.size();
+    let resid_data = unsafe { residual.data_mut() };
+    for i in 0..size {
+        resid_data[i] += out_data[i];
+    }
 }
 
 #[test]
