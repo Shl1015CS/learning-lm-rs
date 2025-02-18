@@ -1,10 +1,31 @@
 use std::{slice, sync::Arc, vec};
+use half::f16;
+
 pub struct Tensor<T> {
     data: Arc<Box<[T]>>,
     shape: Vec<usize>,
     offset: usize,
     length: usize,
 }
+pub trait ToF32 {
+    fn to_f32(self) -> f32;
+}
+
+impl ToF32 for f32 {
+    fn to_f32(self) -> f32 { self }
+}
+
+impl ToF32 for f16 {
+    fn to_f32(self) -> f32 { self.to_f32() }
+}
+
+// #[allow(dead_code)]
+// impl Tensor<f16> {
+//     pub fn to_f32(&self) -> Tensor<f32> {
+//         let data_f32: Vec<f32> = self.data().iter().map(|&x| x.to_f32()).collect();
+//         Tensor::new(data_f32, &self.shape)
+//     }
+// }
 
 impl<T: Copy + Clone + Default> Tensor<T> {
     pub fn new(data: Vec<T>, shape: &Vec<usize>) -> Self {

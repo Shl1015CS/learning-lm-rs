@@ -1,36 +1,64 @@
 use crate::config::LlamaConfigJson;
 use crate::tensor::Tensor;
 use safetensors::SafeTensors;
-pub struct LLamaParams<T> {
+
+#[cfg(feature = "mixed_precision")]
+use half::f16;
+
+#[cfg(feature = "mixed_precision")]
+pub type WeightType = f16;
+#[cfg(not(feature = "mixed_precision"))]
+pub type WeightType = f32;
+
+pub struct LLamaParams<WeightType> {
     // token_id to embedding lookup table
-    pub embedding_table: Tensor<T>, // (vocab_size, dim)
+    pub embedding_table: Tensor<WeightType>, // (vocab_size, dim)
     // decoder layer
-    pub rms_att_w: Vec<Tensor<T>>, // (hidden_size, ) x layers
-    pub wq: Vec<Tensor<T>>,        // (n_heads * head_size, hidden_size) x layers
-    pub wk: Vec<Tensor<T>>,        // (n_kv_heads * head_size, hidden_size) x layers
-    pub wv: Vec<Tensor<T>>,        // (n_kv_heads * head_size, hidden_size) x layers
-    pub wo: Vec<Tensor<T>>,        // (hidden_size, n_heads * head_size) x layers
+    pub rms_att_w: Vec<Tensor<WeightType>>, // (hidden_size, ) x layers
+    pub wq: Vec<Tensor<WeightType>>,        // (n_heads * head_size, hidden_size) x layers
+    pub wk: Vec<Tensor<WeightType>>,        // (n_kv_heads * head_size, hidden_size) x layers
+    pub wv: Vec<Tensor<WeightType>>,        // (n_kv_heads * head_size, hidden_size) x layers
+    pub wo: Vec<Tensor<WeightType>>,        // (hidden_size, n_heads * head_size) x layers
     // ffn layer
-    pub rms_ffn_w: Vec<Tensor<T>>, // (hidden_size, ) x layers
-    pub w_up: Vec<Tensor<T>>,      // (intermediate_size, hidden_size) x layers
-    pub w_gate: Vec<Tensor<T>>,    // (intermediate_size, hidden_size) x layers
-    pub w_down: Vec<Tensor<T>>,    // (hidden_size, intermediate_size) x layers
+    pub rms_ffn_w: Vec<Tensor<WeightType>>, // (hidden_size, ) x layers
+    pub w_up: Vec<Tensor<WeightType>>,      // (intermediate_size, hidden_size) x layers
+    pub w_gate: Vec<Tensor<WeightType>>,    // (intermediate_size, hidden_size) x layers
+    pub w_down: Vec<Tensor<WeightType>>,    // (hidden_size, intermediate_size) x layers
     // output
-    pub rms_out_w: Tensor<T>, // (hidden_size, )
-    pub lm_head: Tensor<T>,   // (vocab_size, dim)
+    pub rms_out_w: Tensor<WeightType>, // (hidden_size, )
+    pub lm_head: Tensor<WeightType>,   // (vocab_size, dim)
 }
 
 impl LLamaParams<f32> {
     pub fn from_safetensors(safetensor: &SafeTensors, config: &LlamaConfigJson) -> Self {
         println!("Available tensors: {:?}", safetensor.names());
 
-        // 内部闭包：根据 key 从 safetensors 中加载张量，并转换为 Tensor<f32>
-        // safetensors 中存储的是原始数据，每个元素占 4 字节，不需要再对张量做形变
-        let load_tensor = |key: &str| -> Tensor<f32> {
+        #[cfg(feature = "mixed_precision")]
+        let load_tensor = |key: &str| -> Tensor<WeightType> {
             let view = safetensor
                 .tensor(key)
                 .unwrap_or_else(|_| panic!("未找到张量：{}", key));
+            // 先将 4 字节数据转换为 f32
             let f32_data: Vec<f32> = view
+                .data()
+                .chunks_exact(4)
+                .map(|chunk| {
+                    let bytes: [u8; 4] = chunk.try_into().expect("chunk 长度不足");
+                    f32::from_le_bytes(bytes)
+                })
+                .collect();
+            // 再将 f32 转换为 f16（WeightType）
+            let f16_data: Vec<WeightType> = f32_data.into_iter().map(|x| half::f16::from_f32(x)).collect();
+            let shape = view.shape().to_vec();
+            Tensor::new(f16_data, &shape)
+        };
+
+        #[cfg(not(feature = "mixed_precision"))]
+        let load_tensor = |key: &str| -> Tensor<WeightType> {
+            let view = safetensor
+                .tensor(key)
+                .unwrap_or_else(|_| panic!("未找到张量：{}", key));
+            let f32_data: Vec<WeightType> = view
                 .data()
                 .chunks_exact(4)
                 .map(|chunk| {
@@ -42,8 +70,7 @@ impl LLamaParams<f32> {
             Tensor::new(f32_data, &shape)
         };
 
-        // 根据配置决定 embedding 参数的加载 key
-        // 当共享 embedding 时，safetensors 中只存储 lm_head.weight
+        // 按照模型结构加载参数
         let embedding_table = if config.tie_word_embeddings {
             load_tensor("lm_head.weight")
         } else {
@@ -61,7 +88,6 @@ impl LLamaParams<f32> {
         let mut gate_proj_weights = Vec::with_capacity(n_layers);
         let mut down_proj_weights = Vec::with_capacity(n_layers);
 
-        // 按照模型架构约定加载每一层的各项参数
         for i in 0..n_layers {
             let base = format!("model.layers.{}", i);
             attn_norm_weights.push(load_tensor(&format!("{}.input_layernorm.weight", base)));
@@ -77,7 +103,6 @@ impl LLamaParams<f32> {
         }
 
         let rms_out_w = load_tensor("model.norm.weight");
-        // 当共享 embedding 时，lm_head 与 embedding_table 数据相同
         let lm_head = if config.tie_word_embeddings {
             Tensor::new(embedding_table.data().to_vec(), &embedding_table.shape().to_vec())
         } else {
