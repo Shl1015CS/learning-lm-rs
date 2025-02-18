@@ -1,13 +1,17 @@
 use std::fs::File;
 use std::vec;
+use std::path::Path;
+use std::sync::{Arc, Mutex};
+use std::collections::HashMap;
+use uuid::Uuid;
+use serde_json;
+use safetensors::SafeTensors;
 
 use crate::config::LlamaConfigJson;
 use crate::kvcache::KVCache;
 use crate::operators as OP;
 use crate::params::LLamaParams;
 use crate::tensor::Tensor;
-use safetensors::SafeTensors;
-use std::path::Path;
 use std::io::Write;
 
 pub struct Llama<T> {
@@ -22,14 +26,15 @@ pub struct Llama<T> {
     rope_theta: f32,        // rope theta for rope initialization
     max_seq_len: usize,     // maximum sequence length
     params: LLamaParams<T>, // trained weights of this model
+    #[allow(dead_code)]
     bos_token_id: u32,      // start token id
     eos_token_id: u32,      // end token id
 }
 
 impl Llama<f32> {
     pub fn from_safetensors(model_dir: impl AsRef<Path>) -> Self {
-        let config = File::open(model_dir.as_ref().join("config.json")).unwrap();
-        let config: LlamaConfigJson = serde_json::from_reader(config).unwrap();
+        let config_file = File::open(model_dir.as_ref().join("config.json")).unwrap();
+        let config: LlamaConfigJson = serde_json::from_reader(config_file).unwrap();
         let model_file = std::fs::read(model_dir.as_ref().join("model.safetensors")).unwrap();
         let safetensor = SafeTensors::deserialize(&model_file).unwrap();
         let params = LLamaParams::from_safetensors(&safetensor, &config);
@@ -45,7 +50,7 @@ impl Llama<f32> {
             eps: config.rms_norm_eps,
             rope_theta: config.rope_theta,
             max_seq_len: config.max_position_embeddings,
-            params: params,
+            params,
             bos_token_id: config.bos_token_id,
             eos_token_id: config.eos_token_id,
         }
@@ -158,6 +163,7 @@ impl Llama<f32> {
         logits
     }
 
+    #[allow(dead_code)]
     pub fn generate(
         &self,
         token_ids: &[u32],
@@ -397,137 +403,61 @@ pub fn test_load_safetensors() {
     assert!(float_eq(&model.params.wo[0].data()[100], &0.01965332, 1e-6));
 
 }
-// impl<T> Tensor<T> 
-// where
-//     T: num_traits::Float + Default + rand::distributions::uniform::SampleUniform,
-// {
-//     pub fn random_normal(shape: &[usize], mean: T, std: T) -> Self {
-//         use rand::prelude::*;
-//         use rand_distr::Normal;
-        
 
-//         let size = shape.iter().product();
-//         let mut rng = rand::thread_rng();
-//         let normal = Normal::new(mean.to_f64().unwrap(), std.to_f64().unwrap()).unwrap();
-        
-//         let data: Vec<T> = (0..size)
-//             .map(|_| T::from(normal.sample(&mut rng)).unwrap())
-//             .collect();
-        
-//         // 将 shape 从 &[usize] 转换为 Vec<usize>，以满足 Tensor::new 的参数要求
-//         let shape_vec = shape.to_vec();
-//         Tensor::new(data, &shape_vec)
-//     }
-// }
-
-// impl<T: Default + Clone + Copy> Tensor<T> {
-//     pub fn zeros(shape: &[usize]) -> Self {
-//         let size = shape.iter().product();
-//         let data = vec![T::default(); size];
-//         let shape_vec = shape.to_vec();
-//         Tensor::new(data, &shape_vec)
-//     }
-// }
-
-// #[test]
-// fn test_self_attention() {
-//     let dqkv = 16;      // 每个头的维度
-//     let n_kv_h = 4;     // KV头数量
-//     let n_groups = 2;    // 每个KV头对应的Q头组数
-//     let seq_len = 1;     // 输入序列长度
-//     let total_seq_len = 8; // 总序列长度（包含缓存）
-//     let hidden_dim = n_kv_h * n_groups * dqkv;
-
-//     let mut hidden_states = Tensor::<f32>::random_normal(&vec![seq_len, hidden_dim], 0.0, 0.1);
-//     let mut att_scores = Tensor::<f32>::zeros(&vec![n_kv_h, n_groups, seq_len, total_seq_len]);
-    
-//     // 构造Q/K/V的模拟参数
-//     let q = Tensor::<f32>::random_normal(&vec![seq_len, n_kv_h * n_groups * dqkv], 0.0, 0.1);
-//     let k = Tensor::<f32>::random_normal(&vec![total_seq_len, n_kv_h * dqkv], 0.0, 0.1);
-//     let v = Tensor::<f32>::random_normal(&vec![total_seq_len, n_kv_h * dqkv], 0.0, 0.1);
-
-//     // 执行 self_attention 计算
-//     self_attention(
-//         &mut hidden_states,
-//         &mut att_scores,
-//         &q,
-//         &k,
-//         &v,
-//         n_kv_h,
-//         n_groups,
-//         seq_len,
-//         total_seq_len,
-//         dqkv,
-//     );
-
-//     // 验证输出形状
-//     assert_eq!(hidden_states.shape(), &vec![seq_len, hidden_dim]);
-    
-//     // 计算统计指标
-//     let output_data = hidden_states.data();
-//     let mean = output_data.iter().sum::<f32>() / output_data.len() as f32;
-//     let variance = output_data.iter()
-//         .map(|x| (x - mean).powi(2))
-//         .sum::<f32>() / output_data.len() as f32;
-//     let std = variance.sqrt();
-
-//     println!("实际均值: {:.6}, 标准差: {:.6}", mean, std);
-    
-//     assert!(
-//         mean.abs() < 0.1,
-//         "输出均值应在±0.1范围内，实际值：{:.6}", mean
-//     );
-//     assert!(
-//         std > 0.01 && std < 0.2,
-//         "输出标准差应在0.01-0.2范围内，实际值：{:.6}", std
-//     );
-
-//     let last_head_start = (n_kv_h - 1) * n_groups * dqkv;
-//     let last_position = &output_data[last_head_start..last_head_start + dqkv];
-//     assert!(
-//         last_position.iter().any(|&x| x.abs() > 0.001),
-//         "最后一个头的输出应存在有效值"
-//     );
-// }
-/// 用于表示一条对话消息
+/// 表示一条对话消息
+#[derive(Clone, Debug)]
 pub struct Message {
     pub role: String,    // "user" 或 "assistant"
     pub content: String, // 消息内容
 }
 
-/// 用于封装对话会话，保存历史对话和 KVCache，不再依赖 tokenizers
+/// ChatSession 用于管理单个会话，包含会话历史和 KVCache
 pub struct ChatSession {
-    pub model: Llama<f32>,
+    pub model: Arc<Llama<f32>>,
     pub conversation: Vec<Message>,
     pub cache: KVCache<f32>,
+    pub history_versions: Vec<Vec<Message>>, // 保存会话快照，用于历史回滚
 }
 
 impl ChatSession {
-    /// 创建一个新的对话会话，内部初始化 KVCache 和空的对话记录
-    pub fn new(model: Llama<f32>) -> Self {
+    /// 创建新的会话，传入 Arc 包裹的模型实例
+    pub fn new(model: Arc<Llama<f32>>) -> Self {
         let cache = model.new_cache();
         ChatSession {
             model,
             conversation: Vec::new(),
             cache,
+            history_versions: Vec::new(),
         }
     }
-    
-    /// 添加用户消息到对话中
+
+    /// 保存当前会话状态，用于回滚
+    fn save_current_version(&mut self) {
+        self.history_versions.push(self.conversation.clone());
+    }
+
+    /// 添加用户消息（同时保存历史）
     pub fn add_user_message(&mut self, content: String) {
+        self.save_current_version();
         self.conversation.push(Message {
             role: "user".to_string(),
             content,
         });
     }
-    
-    /// 构建对话的 prompt 字符串，符合对话模板：
-    /// {% for message in messages %}
-    /// <|im_start|>role
-    /// content<|im_end|>
-    /// {% endfor %}<|im_start|>assistant
+
+    /// 添加 AI 回复消息（同时保存历史）
+    pub fn add_assistant_message(&mut self, content: String) {
+        self.save_current_version();
+        self.conversation.push(Message {
+            role: "assistant".to_string(),
+            content,
+        });
+    }
+
+    /// 拼接当前对话记录，生成模型推理输入的 prompt 字符串
     pub fn build_prompt(&self) -> String {
         let mut prompt = String::new();
+        // 将所有对话消息依次拼接（带上分隔标识）
         for msg in &self.conversation {
             prompt.push_str("<|im_start|>");
             prompt.push_str(&msg.role);
@@ -535,6 +465,7 @@ impl ChatSession {
             prompt.push_str(&msg.content);
             prompt.push_str("<|im_end|>\n");
         }
+        // 追加 AI 推理输入前的标识
         prompt.push_str("<|im_start|>assistant\n");
         prompt
     }
@@ -578,12 +509,79 @@ impl ChatSession {
         
         generated
     }
-    
-    /// 将生成的 assistant 回复添加到对话历史中
-    pub fn add_assistant_message(&mut self, content: String) {
-        self.conversation.push(Message {
-            role: "assistant".to_string(),
-            content,
-        });
+
+    /// 返回格式化后的对话历史，每条消息格式为 "role: content"
+    pub fn get_history(&self) -> Vec<String> {
+        self.conversation
+            .iter()
+            .map(|msg| format!("{}: {}", msg.role, msg.content))
+            .collect()
+    }
+
+    /// 清空会话历史和快照，同时重置 KVCache
+    pub fn clear(&mut self) {
+        self.conversation.clear();
+        self.history_versions.clear();
+        self.cache = self.model.new_cache();
+    }
+
+    /// 回滚到指定历史版本（version_index 为 history_versions 下标）
+    pub fn rollback(&mut self, version_index: usize) {
+        if version_index < self.history_versions.len() {
+            self.conversation = self.history_versions[version_index].clone();
+            self.history_versions.truncate(version_index + 1);
+        }
+    }
+}
+
+/// SessionManager 用于管理多会话，通过 session_id 标识每个 ChatSession
+/// 这里我们将每个 ChatSession 包装在 Arc<Mutex<...>> 中，以便安全地在多线程环境下共享，并避免克隆整个会话。
+pub struct SessionManager {
+    pub sessions: Mutex<HashMap<String, Arc<Mutex<ChatSession>>>>,
+}
+
+impl SessionManager {
+    /// 创建新的 SessionManager 实例
+    pub fn new() -> Self {
+        SessionManager {
+            sessions: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// 创建一个新的会话，并返回生成的唯一 session_id
+    pub fn create_session(&self, model: Arc<Llama<f32>>) -> String {
+        let session = ChatSession::new(model);
+        let session_arc = Arc::new(Mutex::new(session));
+        let session_id = Uuid::new_v4().to_string();
+        self.sessions
+            .lock()
+            .unwrap()
+            .insert(session_id.clone(), session_arc);
+        session_id
+    }
+
+    /// 根据 session_id 获取会话（返回 Arc<Mutex<ChatSession>>，可安全克隆引用）
+    pub fn get_session(&self, session_id: &str) -> Option<Arc<Mutex<ChatSession>>> {
+        self.sessions.lock().unwrap().get(session_id).cloned()
+    }
+
+    /// 更新指定 session_id 的会话
+    pub fn update_session(&self, session_id: &str, session: Arc<Mutex<ChatSession>>) {
+        self.sessions
+            .lock()
+            .unwrap()
+            .insert(session_id.to_string(), session);
+    }
+
+    /// 对指定会话进行回滚，将会话恢复到指定历史版本
+    pub fn rollback_session(&self, session_id: &str, version_index: usize) -> Option<()> {
+        let sessions_lock = self.sessions.lock().unwrap();
+        if let Some(session_arc) = sessions_lock.get(session_id) {
+            let mut session = session_arc.lock().unwrap();
+            session.rollback(version_index);
+            Some(())
+        } else {
+            None
+        }
     }
 }

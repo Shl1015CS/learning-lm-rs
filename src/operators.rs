@@ -1,16 +1,24 @@
-use crate::tensor::Tensor;
-
+use crate::tensor::{Tensor, ToF32};
 // get (row) vectors from a 2D table given a list of indices
-pub fn gather(y: &mut Tensor<f32>, indices: &Tensor<u32>, table: &Tensor<f32>) {
+pub fn gather<U: Copy + ToF32 + Default>(
+    y: &mut Tensor<f32>,
+    indices: &Tensor<u32>,
+    table: &Tensor<U>,
+) {
     let length = indices.size();
     let table_shape = table.shape();
     assert!(table_shape.len() == 2);
     let dim = table_shape[1];
     assert!(y.size() == length * dim);
+    let y_data = unsafe { y.data_mut() };
     for i in 0..length {
-        let src = &table.data()[indices.data()[i] as usize * dim..][..dim];
-        let dst = &mut unsafe { y.data_mut() }[i * dim..][..dim];
-        dst.copy_from_slice(src);
+        let idx = indices.data()[i] as usize;
+        let src_start = idx * dim;
+        let src = &table.data()[src_start..src_start + dim];
+        let dst = &mut y_data[i * dim..(i + 1) * dim];
+        for j in 0..dim {
+            dst[j] = src[j].to_f32();
+        }
     }
 }
 
@@ -123,36 +131,39 @@ pub fn swiglu(y: &mut Tensor<f32>, x: &Tensor<f32>) {
 
 // C = beta * C + alpha * A @ B^T
 // hint: You don't need to do an explicit transpose of B
-pub fn matmul_transb(c: &mut Tensor<f32>, beta: f32, a: &Tensor<f32>, b: &Tensor<f32>, alpha: f32) {
-    // 检查 A 的形状：m×k
+pub fn matmul_transb<U: Copy + ToF32 + Default>(
+    c: &mut Tensor<f32>,
+    beta: f32,
+    a: &Tensor<f32>,
+    b: &Tensor<U>,
+    alpha: f32,
+) {
     let a_shape = a.shape();
     assert!(a_shape.len() == 2, "A 必须是二维矩阵");
     let m = a_shape[0];
     let k = a_shape[1];
 
-    // 检查 B 的形状：n×k
     let b_shape = b.shape();
     assert!(b_shape.len() == 2, "B 必须是二维矩阵");
     assert!(b_shape[1] == k, "B 的列数必须与 A 的列数相等");
     let n = b_shape[0];
 
-    // 检查 C 的形状：m×n
     let c_shape = c.shape();
     assert!(c_shape.len() == 2, "C 必须是二维矩阵");
-    assert!(c_shape[0] == m && c_shape[1] == n, "C 的形状必须为 m×n");
+    assert!(
+        c_shape[0] == m && c_shape[1] == n,
+        "C 的形状必须为 m×n"
+    );
 
     let a_data = a.data();
     let b_data = b.data();
     let c_data = unsafe { c.data_mut() };
 
-    // 对于 C 的每个元素，执行：C[i, j] = beta * C[i, j] + alpha * (∑ₚ A[i, p] * B[j, p])
     for i in 0..m {
         for j in 0..n {
             let mut sum = 0.0;
-            // 注意：B 矩阵，以转置方式访问时，其对应第 j 行的原始数据即为
-            // B[j, p]，p 的范围为 0..k
             for p in 0..k {
-                sum += a_data[i * k + p] * b_data[j * k + p];
+                sum += a_data[i * k + p] * b_data[j * k + p].to_f32();
             }
             c_data[i * n + j] = beta * c_data[i * n + j] + alpha * sum;
         }
