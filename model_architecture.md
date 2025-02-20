@@ -27,8 +27,6 @@
   let full_k = &mut cache.k_cache(layer, 0);  // 增量更新
   let full_v = &mut cache.v_cache(layer, 0);
   ```
-  - 历史K/V复用率 > 90%（长序列场景）
-  - 内存占用从O(n²)降为O(n)
 
 - **并行计算架构**：
   ```rust
