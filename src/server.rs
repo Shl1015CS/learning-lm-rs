@@ -46,11 +46,17 @@ struct RollbackResponse {
     history: Vec<String>,
 }
 
+// 添加新的结构体用于会话列表响应
+#[derive(Serialize)]
+struct SessionListResponse {
+    sessions: Vec<String>,
+}
+
 /// 应用状态，包含共享模型、Tokenizer 和多会话管理器
 struct AppState {
     model: Arc<Llama<f32>>,
     tokenizer: Tokenizer,
-    session_manager: SessionManager,
+    session_manager: Arc<SessionManager>,
 }
 
 /// 创建新会话，返回 session_id
@@ -130,6 +136,12 @@ async fn rollback_endpoint(req: web::Json<RollbackRequest>, data: web::Data<AppS
     } else {
         HttpResponse::BadRequest().body("Invalid session_id")
     }
+}
+
+/// 获取会话列表的处理函数
+async fn list_sessions(data: web::Data<AppState>) -> impl Responder {
+    let sessions = data.session_manager.list_sessions();
+    HttpResponse::Ok().json(SessionListResponse { sessions })
 }
 
 /// 首页，返回包含单个当前会话以及会话列表切换功能的 HTML 页面
@@ -231,13 +243,38 @@ r#"
       const chatHistory = document.getElementById("chat-history");
       const chatInput = document.getElementById("chat-input");
       
+      // 页面加载时获取现有会话列表
+      function loadExistingSessions() {
+          fetch("/session/list")
+              .then(response => response.json())
+              .then(data => {
+                  // 清空现有会话列表
+                  sessionsList.innerHTML = "";
+                  sessions = {};
+                  
+                  // 添加所有会话到列表
+                  data.sessions.forEach(sessionId => {
+                      sessions[sessionId] = [];  // 初始化会话历史记录
+                      addSessionToList(sessionId);
+                  });
+                  
+                  // 如果有会话，激活第一个
+                  if (data.sessions.length > 0) {
+                      setActiveSession(data.sessions[0]);
+                  }
+              });
+      }
+      
+      // 页面加载时立即执行
+      loadExistingSessions();
+      
       // 新建会话按钮：调用 /session/create 接口，创建会话后加入列表并设为活动
       document.getElementById("new-session").addEventListener("click", function() {
           fetch("/session/create")
             .then(response => response.json())
             .then(data => {
               let sessionId = data.session_id;
-              sessions[sessionId] = [];
+              sessions[sessionId] = [];  // 初始化新会话的历史记录
               addSessionToList(sessionId);
               setActiveSession(sessionId);
             });
@@ -256,13 +293,35 @@ r#"
       
       // 设置当前活动会话，并加载历史记录
       function setActiveSession(sessionId) {
+          // 保存当前会话的聊天记录到 sessions 对象
+          if (activeSessionId) {
+              sessions[activeSessionId] = Array.from(chatHistory.children).map(p => p.textContent);
+          }
+          
           activeSessionId = sessionId;
           activeSessionSpan.textContent = sessionId;
+          
+          // 更新会话列表项的激活状态
           const items = sessionsList.querySelectorAll("li");
           items.forEach(item => {
-              item.classList.toggle("active", item.dataset.sessionId === sessionId);
+              item.classList.remove("active");
+              if (item.dataset.sessionId === sessionId) {
+                  item.classList.add("active");
+              }
           });
-          loadHistory();
+          
+          // 显示选中会话的历史记录
+          chatHistory.innerHTML = "";
+          if (sessions[sessionId]) {
+              sessions[sessionId].forEach(message => {
+                  const p = document.createElement("p");
+                  p.textContent = message;
+                  chatHistory.appendChild(p);
+              });
+          } else {
+              // 如果没有缓存的历史记录，从服务器加载
+              loadHistory();
+          }
       }
       
       // 加载当前会话历史记录
@@ -271,6 +330,7 @@ r#"
           fetch("/history?session_id=" + activeSessionId)
             .then(response => response.json())
             .then(data => {
+               sessions[activeSessionId] = data.history;  // 缓存历史记录
                chatHistory.innerHTML = "";
                data.history.forEach(message => {
                   const p = document.createElement("p");
@@ -338,13 +398,13 @@ pub async fn main() -> std::io::Result<()> {
     
     // 使用 Arc 包装模型
     let shared_model = Arc::new(llama);
-    // 初始化 SessionManager
-    let session_manager = SessionManager::new();
+    // 初始化 SessionManager，并包装在 Arc 中
+    let session_manager = Arc::new(SessionManager::new());
     
     let data = web::Data::new(AppState {
         model: shared_model,
         tokenizer,
-        session_manager,
+        session_manager, // 已经是 Arc<SessionManager>
     });
     
     println!("启动服务器：127.0.0.1:8080");
@@ -353,6 +413,7 @@ pub async fn main() -> std::io::Result<()> {
             .app_data(data.clone())
             .route("/", web::get().to(index))
             .route("/session/create", web::get().to(create_session))
+            .route("/session/list", web::get().to(list_sessions))  // 新增路由
             .route("/chat", web::post().to(chat_endpoint))
             .route("/history", web::get().to(history_endpoint))
             .route("/clear", web::post().to(clear_endpoint))

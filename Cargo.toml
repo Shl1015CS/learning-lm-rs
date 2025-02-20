@@ -16,5 +16,11 @@ half = "1.8"
 uuid = { version = "1", features = ["v4"] }
 log = "0.4"
 env_logger = "0.9"
+rayon = "1.6"
+criterion = "0.3"
+cust = "0.3.2"
+once_cell = "1.17"
+
 [features]
-mixed_precision = []
+gpu = []          # 启用 GPU 后端
+mixed_precision = []  # 混合精度计算

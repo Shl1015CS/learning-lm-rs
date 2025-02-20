@@ -1,13 +1,16 @@
+pub mod gpu;
 mod config;
 mod kvcache;
 mod model;
 mod operators;
+#[cfg(test)]
+mod perf_tests;
 mod params;
 mod tensor;
 mod server;
 use std::env;
-// use std::path::PathBuf;
-// use tokenizers::Tokenizer;
+use std::path::PathBuf;
+use tokenizers::Tokenizer;
 // use crate::model::ChatSession;
 
 // fn main() {
@@ -76,6 +79,22 @@ use std::env;
 // }
 
 fn main() -> std::io::Result<()> {
+    let project_dir = env!("CARGO_MANIFEST_DIR");
+    let model_dir = PathBuf::from(project_dir).join("models").join("story");
+    let llama = model::Llama::<f32>::from_safetensors(&model_dir);
+    let tokenizer = Tokenizer::from_file(model_dir.join("tokenizer.json")).unwrap();
+    let input = "Once upon a time";
+    let binding = tokenizer.encode(input, true).unwrap();
+    let input_ids = binding.get_ids();
+    print!("\n{}", input);
+    let output_ids = llama.generate(
+        input_ids,
+        500,
+        0.8,
+        30,
+        1.,
+    );
+    println!("{}", tokenizer.decode(&output_ids, true).unwrap());
     let args: Vec<String> = env::args().collect();
     if args.len() > 1 && args[1] == "--cli" {
         interactive_mode();

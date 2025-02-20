@@ -7,16 +7,17 @@ pub struct Tensor<T> {
     offset: usize,
     length: usize,
 }
+
 pub trait ToF32 {
-    fn to_f32(self) -> f32;
+    fn to_f32(&self) -> f32;
 }
 
 impl ToF32 for f32 {
-    fn to_f32(self) -> f32 { self }
+    fn to_f32(&self) -> f32 { *self }
 }
 
 impl ToF32 for f16 {
-    fn to_f32(self) -> f32 { self.to_f32() }
+    fn to_f32(&self) -> f32 { self.to_f32() }
 }
 
 // #[allow(dead_code)]
